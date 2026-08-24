@@ -1,0 +1,28 @@
+# Intervention Policy Table
+# Mapping of root-cause categories to bounded recovery actions.
+# Bounds are defined here but enforced in downstream execution (Phase 2).
+
+policies:
+  Insufficient Funds:
+    action: "Smart retry scheduled on payday/salary-credit window"
+    bounds: "Max 3 retries, min 48h apart"
+
+  Expired Card:
+    action: "Trigger dunning message + request card re-authorization"
+    bounds: "Max 2 dunning attempts over 7 days"
+
+  Transient/Network:
+    action: "Immediate smart retry with exponential backoff"
+    bounds: "Max 3 retries, backoff 1h/6h/24h"
+
+  Mandate Lapse:
+    action: "Request mandate re-authorization from customer"
+    bounds: "1 request, then escalate"
+
+  Hard Fraud / Do-Not-Retry:
+    action: "NO automated action; escalate to human review"
+    bounds: "Hard stop, zero retries"
+
+  Unknown / Ambiguous:
+    action: "Escalate to human review"
+    bounds: "Hard stop, zero retries"

@@ -1,0 +1,45 @@
+# Failure-Code Taxonomy Configuration
+# Mapping of raw failure codes to root-cause categories.
+#
+# PRECEDENCE DECISION NOTE:
+# The failure code 'do_not_honor' is treated strictly as 'Hard Fraud / Do-Not-Retry'
+# (non-recoverable). To avoid ambiguity or non-deterministic mapping, 'do_not_honor' 
+# is excluded from 'Insufficient Funds', and other explicit codes (e.g., 'insufficient_funds', '51')
+# are used for low-balance scenarios.
+
+categories:
+  Insufficient Funds:
+    codes:
+      - insufficient_funds
+      - "51"
+      - low_balance
+    recoverable: true
+
+  Expired Card:
+    codes:
+      - expired_card
+      - "54"
+      - card_expired
+    recoverable: true
+
+  Transient/Network:
+    codes:
+      - issuer_unavailable
+      - gateway_timeout
+      - "91"
+      - network_error
+    recoverable: true
+
+  Mandate Lapse:
+    codes:
+      - mandate_revoked
+      - mandate_expired
+    recoverable: true
+
+  Hard Fraud / Do-Not-Retry:
+    codes:
+      - fraud_suspected
+      - stolen_card
+      - do_not_honor
+      - blocklist
+    recoverable: false
