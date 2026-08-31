@@ -1,9 +1,9 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from src.infrastructure.ports import ClockPort
 
 class SystemClock(ClockPort):
     def now(self) -> datetime:
-        return datetime.utcnow()
+        return datetime.now(timezone.utc).replace(tzinfo=None)
 
 class SimulatedClock(ClockPort):
     def __init__(self, initial_time: datetime = None):
