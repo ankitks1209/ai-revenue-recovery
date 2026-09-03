@@ -9,6 +9,7 @@ from src.policy_engine import PolicyEngine
 from src.domain.audit import AuditEvent, ActionType, Outcome as AuditOutcome, ReasonCode
 from src.domain.masking import MaskingPolicy
 from src.domain.escalation import GracefulFailureHandler, EscalationPolicy
+from src.domain.action_mapper import map_action
 from src.infrastructure.audit_repository import AuditLogRepository
 from src.infrastructure.structured_logger import StructuredLogger
 
@@ -199,6 +200,16 @@ class ExecuteRecoveryBatch:
         )
         self.repository.save_attempt(att)
         stats["skipped_count"] += 1
+
+        # NEW: Emit audit event for temporary backoff skip
+        mapped_action = map_action(chosen_action)
+        self._emit_audit(
+            payment=payment,
+            action=mapped_action,
+            outcome=AuditOutcome.SKIPPED,
+            reason_code=ReasonCode.RECOVERED,
+            decision_rationale=reason
+        )
 
     def _execute_rail_attempt(self, payment, category, chosen_action, executed_retries, policy_rule, now, stats):
         attempt_number = executed_retries + 1
