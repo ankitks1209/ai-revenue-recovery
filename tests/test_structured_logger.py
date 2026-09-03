@@ -31,4 +31,3 @@ def test_structured_logger_emits_masked_data():
     assert log_entry["txn_id"] == "txn_300"
     assert log_entry["customer_ref"] == "MASKED::abcdef123456"
     assert raw_customer_id not in str(log_entry)
-
