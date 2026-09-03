@@ -245,6 +245,16 @@ class ExecuteRecoveryBatch:
             )
             self.repository.save_attempt(att)
             stats["success_count"] += 1
+
+            # NEW: Emit audit event for successful recovery
+            mapped_action = map_action(chosen_action)
+            self._emit_audit(
+                payment=payment,
+                action=mapped_action,
+                outcome=AuditOutcome.RECOVERED,
+                reason_code=ReasonCode.RECOVERED,
+                decision_rationale="Recovery attempt succeeded"
+            )
         else:
             att = RecoveryAttempt(
                 txn_id=payment.txn_id, attempt_number=attempt_number,
@@ -252,6 +262,16 @@ class ExecuteRecoveryBatch:
             )
             self.repository.save_attempt(att)
             stats["failed_count"] += 1
+
+            # NEW: Emit audit event for failed recovery attempt
+            mapped_action = map_action(chosen_action)
+            self._emit_audit(
+                payment=payment,
+                action=mapped_action,
+                outcome=AuditOutcome.FAILED,
+                reason_code=ReasonCode.RAIL_DECLINED,
+                decision_rationale=f"Rail declined: {rail_response.error_message}"
+            )
 
             if category == "Mandate Lapse" or attempt_number >= policy_rule.max_retries:
                 reason = f"Post-failure escalation trigger for {category} (attempt {attempt_number})"
