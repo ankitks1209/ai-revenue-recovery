@@ -184,6 +184,26 @@ class ExecuteRecoveryBatch:
 
     def _handle_max_retries(self, payment, max_retries, chosen_action, now, stats):
         reason = f"Retry cap ({max_retries}) exhausted"
+
+        # NEW: Evaluate graceful failure for max-retries/stopping-rule case
+        is_do_not_retry = False  # Not a hard-fraud case
+        stopping_rule_tripped = True  # Retry cap is a stopping-rule trip
+        refusal = self.graceful_failure.evaluate(
+            is_do_not_retry=is_do_not_retry,
+            stopping_rule_tripped=stopping_rule_tripped
+        )
+
+        if refusal:
+            # NEW: Emit audit event for retry-cap refusal
+            self._emit_audit(
+                payment=payment,
+                action=ActionType.REFUSE,
+                outcome=AuditOutcome.ESCALATED,
+                reason_code=refusal.reason_code,
+                decision_rationale=refusal.rationale
+            )
+
+        # Existing Phase 2 logic (unchanged)
         esc = self.escalation_service.create_escalation(payment.txn_id, reason, now)
         self.repository.save_escalation(esc)
         att = RecoveryAttempt(
