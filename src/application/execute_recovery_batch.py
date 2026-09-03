@@ -150,6 +150,28 @@ class ExecuteRecoveryBatch:
 
     def _handle_hard_stop(self, payment, category, chosen_action, now, stats):
         reason = f"Hard stop policy guard for category: {category}"
+
+        # NEW: Evaluate graceful failure for hard-stop case
+        # Derive is_do_not_retry from payment recoverable_flag (hard fraud indicator)
+        is_do_not_retry = not payment.recoverable_flag
+        # Hard-stop policy path does not map to stopping_rule_tripped;
+        # GracefulFailureHandler will classify based on is_do_not_retry alone
+        refusal = self.graceful_failure.evaluate(
+            is_do_not_retry=is_do_not_retry,
+            stopping_rule_tripped=False
+        )
+
+        if refusal:
+            # NEW: Emit audit event for hard-stop refusal
+            self._emit_audit(
+                payment=payment,
+                action=ActionType.REFUSE,
+                outcome=AuditOutcome.ESCALATED,
+                reason_code=refusal.reason_code,
+                decision_rationale=refusal.rationale
+            )
+
+        # Existing Phase 2 logic (unchanged)
         esc = self.escalation_service.create_escalation(payment.txn_id, reason, now)
         self.repository.save_escalation(esc)
         att = RecoveryAttempt(
