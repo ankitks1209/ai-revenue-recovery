@@ -1,10 +1,16 @@
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
+import uuid
 from src.domain.entities import RecoveryAttempt, Escalation
 from src.domain.models import Outcome
 from src.domain.retry_policy import RetryPolicy
 from src.domain.escalation_service import EscalationService
 from src.infrastructure.ports import FailedPaymentRepositoryPort, PaymentRailPort, ClockPort
 from src.policy_engine import PolicyEngine
+from src.domain.audit import AuditEvent, ActionType, Outcome as AuditOutcome, ReasonCode
+from src.domain.masking import MaskingPolicy
+from src.domain.escalation import GracefulFailureHandler, EscalationPolicy
+from src.infrastructure.audit_repository import AuditLogRepository
+from src.infrastructure.structured_logger import StructuredLogger
 
 class ExecuteRecoveryBatch:
     def __init__(
@@ -14,7 +20,12 @@ class ExecuteRecoveryBatch:
         clock: ClockPort,
         policy_engine: PolicyEngine = None,
         retry_policy: RetryPolicy = None,
-        escalation_service: EscalationService = None
+        escalation_service: EscalationService = None,
+        audit_repository: AuditLogRepository = None,
+        structured_logger: StructuredLogger = None,
+        masking_policy: MaskingPolicy = None,
+        escalation_policy: EscalationPolicy = None,
+        graceful_failure_handler: GracefulFailureHandler = None
     ):
         self.repository = repository
         self.payment_rail = payment_rail
@@ -22,6 +33,14 @@ class ExecuteRecoveryBatch:
         self.policy_engine = policy_engine or PolicyEngine()
         self.retry_policy = retry_policy or RetryPolicy()
         self.escalation_service = escalation_service or EscalationService()
+
+        # NEW: Audit infrastructure with backward-compatible in-memory defaults
+        # In-memory SQLite persists within this executor instance's lifetime
+        self.audit_repo = audit_repository or AuditLogRepository(db_url="sqlite:///:memory:")
+        self.logger = structured_logger or StructuredLogger()
+        self.masking = masking_policy or MaskingPolicy()
+        self.escalation_policy_service = escalation_policy or EscalationPolicy()
+        self.graceful_failure = graceful_failure_handler or GracefulFailureHandler()
 
     def execute(self) -> Dict[str, Any]:
         payments = self.repository.get_all_payments()
@@ -58,6 +77,76 @@ class ExecuteRecoveryBatch:
             self._execute_rail_attempt(payment, category, chosen_action, executed_retries, policy_rule, now, stats)
 
         return {"total_processed": len(payments), **stats}
+
+    def _emit_audit(
+        self,
+        payment,
+        action: ActionType,
+        outcome,  # Phase 3 AuditOutcome (from src.domain.audit)
+        reason_code,  # Phase 3 ReasonCode (from src.domain.audit)
+        decision_rationale: str
+    ) -> AuditEvent:
+        """
+        Single reusable helper for all audit emission paths.
+
+        Handles:
+        1. Masking customer_id before audit construction
+        2. Generating fresh UUID4 event_id for every event
+        3. Tier assignment via EscalationPolicy.assign_tier()
+        4. Scrubbing decision_rationale before storage
+        5. Appending to AuditLogRepository (already-masked event only)
+        6. Emitting to StructuredLogger (already-masked event only)
+
+        Observational only — no side effects on money-action logic.
+        """
+        # Step 1: Raw customer_id from payment
+        raw_customer_id = payment.customer_id
+
+        # Step 2: Mask it
+        customer_ref_masked = self.masking.mask_customer_ref(raw_customer_id)
+
+        # Step 3: Fresh UUID4 event_id
+        event_id = str(uuid.uuid4())
+
+        # Step 4: Scrub rationale
+        rationale_scrubbed = self.masking.scrub_text(decision_rationale)
+
+        # Step 5: Assign tier via policy (NEVER hard-code)
+        tier = self.escalation_policy_service.assign_tier(
+            reason_code=reason_code,
+            amount=payment.amount,
+            retry_count=payment.executed_retry_count
+        )
+
+        # Step 6: Construct already-masked AuditEvent
+        event = AuditEvent(
+            event_id=event_id,
+            txn_id=payment.txn_id,
+            timestamp=self.clock.now(),
+            action=action,
+            decision_rationale=rationale_scrubbed,
+            outcome=outcome,
+            reason_code=reason_code,
+            customer_ref_masked=customer_ref_masked,
+            tier=tier
+        )
+
+        # Step 7: Append already-masked event to repository
+        try:
+            self.audit_repo.append(event)
+        except Exception:
+            # Observational only — audit failure does NOT alter money-action
+            pass
+
+        # Step 8: Emit already-masked event to logger
+        try:
+            self.logger.emit(event)
+        except Exception:
+            # Observational only — logger failure does NOT alter money-action
+            pass
+
+        return event
+
 
     def _handle_hard_stop(self, payment, category, chosen_action, now, stats):
         reason = f"Hard stop policy guard for category: {category}"
