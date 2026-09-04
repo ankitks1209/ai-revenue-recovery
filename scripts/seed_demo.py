@@ -3,7 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import pathlib
 import sys
+
+# Minimal repository-root bootstrap for direct invocation:
+# `python scripts/seed_demo.py --confirm` must work from repo root without PYTHONPATH.
+_REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 
 DEMO_PAYMENTS_URL = "sqlite:///demo_failed_payments.db"
