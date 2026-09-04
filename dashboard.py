@@ -9,8 +9,10 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from src.application.build_dashboard_data import BuildDashboardData
+from src.application.get_recovery_queue import GetRecoveryQueue
 from src.domain.metrics import DashboardMetrics
 from src.domain.metrics import MetricsAggregator
+from src.domain.recovery_queue import RecoveryQueue
 from src.infrastructure.audit_repository import AuditLogRepository
 from src.infrastructure.repository import SQLiteFailedPaymentRepository
 
@@ -97,6 +99,60 @@ def filter_exceptions(
     return result
 
 
+def build_recovery_queue_df(queue: RecoveryQueue) -> pd.DataFrame:
+    cols = [
+        "Transaction",
+        "Amount",
+        "Currency",
+        "Root Cause",
+        "Failure Code",
+        "Lifecycle State",
+        "Recommendation",
+        "Hint",
+        "Status",
+        "Tier",
+        "Reason Code",
+    ]
+    if not queue.rows:
+        return pd.DataFrame(columns=cols)
+    records: list[dict[str, object]] = []
+    for r in queue.rows:
+        records.append({
+            "Transaction": r.txn_id,
+            "Amount": format_inr(r.amount),
+            "Currency": r.currency,
+            "Root Cause": r.root_cause_label,
+            "Failure Code": r.failure_code,
+            "Lifecycle State": r.lifecycle_state.value,
+            "Recommendation": r.recommendation_kind.value,
+            "Hint": r.provider_hint or "",
+            "Status": r.status,
+            "Tier": r.tier or "",
+            "Reason Code": r.reason_code or "",
+        })
+    return pd.DataFrame(records, columns=cols)
+
+
+def filter_recovery_queue(
+    rows: tuple | list,  # type: ignore[type-arg]
+    state_filter: list[str] | None = None,
+    kind_filter: list[str] | None = None,
+    tier_filter: list[str] | None = None,
+    root_cause_filter: list[str] | None = None,
+) -> list:
+    """View-only filter for queue rows — does not alter KPIs."""
+    result = list(rows)
+    if state_filter:
+        result = [r for r in result if r.lifecycle_state.value in state_filter]
+    if kind_filter:
+        result = [r for r in result if r.recommendation_kind.value in kind_filter]
+    if tier_filter:
+        result = [r for r in result if (r.tier or "") in tier_filter]
+    if root_cause_filter:
+        result = [r for r in result if r.root_cause_label in root_cause_filter]
+    return result
+
+
 DEMO_PAYMENTS_URL = "sqlite:///demo_failed_payments.db"
 DEMO_AUDIT_URL = "sqlite:///demo_audit_log.db"
 
@@ -119,6 +175,23 @@ def load_metrics() -> DashboardMetrics:
         metrics_aggregator=aggregator,
     )
     return builder.run()
+
+
+def load_recovery_queue() -> RecoveryQueue:
+    """Read-only queue load — same repo factory as load_metrics, no KPI mutation."""
+    if os.getenv("DEMO_MODE") == "1":
+        p_engine = create_engine(DEMO_PAYMENTS_URL, echo=False)
+        PSess = sessionmaker(bind=p_engine, autoflush=False, autocommit=False)
+        payment_repo = SQLiteFailedPaymentRepository(session_factory=PSess)
+        audit_repo = AuditLogRepository(db_url=DEMO_AUDIT_URL)
+    else:
+        payment_repo = SQLiteFailedPaymentRepository()
+        audit_repo = AuditLogRepository()
+    service = GetRecoveryQueue(
+        payment_repository=payment_repo,
+        audit_repository=audit_repo,
+    )
+    return service.run()
 
 
 # ---------------------------------------------------------------------------
@@ -204,6 +277,67 @@ def _render_dashboard() -> None:
         st.dataframe(df, use_container_width=True, hide_index=True)
         if len(filtered) != len(metrics.exception_list):
             st.caption(f"Showing {len(filtered)} of {len(metrics.exception_list)} exceptions — headline KPIs remain batch-wide")
+
+    # Recovery Queue — operator view (read-only, filters view-only, KPIs batch-wide)
+    st.subheader("Recovery Queue")
+    try:
+        queue = load_recovery_queue()
+    except Exception as exc:  # noqa: BLE001 — degrade queue only, preserve KPIs
+        st.error(f"Failed to load recovery queue: {exc}")
+        from src.domain.recovery_lifecycle import RecoveryState as _RS
+        from src.domain.recovery_recommendation import RecommendationKind as _RK
+        queue = RecoveryQueue(
+            rows=(),
+            total=0,
+            counts_by_state=tuple((s.value, 0) for s in _RS),
+            counts_by_kind=tuple((k.value, 0) for k in _RK),
+        )
+
+    if not queue.rows:
+        st.info("No payments requiring attention.")
+    else:
+        # Queue-specific sidebar filters — distinct keys so they don't collide with exception filters
+        with st.sidebar:
+            st.markdown("---")
+            st.markdown("**Recovery Queue filters — queue view only**")
+            q_state_filter = st.multiselect(
+                "Queue lifecycle state",
+                sorted({r.lifecycle_state.value for r in queue.rows}),
+                default=[],
+                key="queue_state",
+            )
+            q_kind_filter = st.multiselect(
+                "Queue recommendation",
+                sorted({r.recommendation_kind.value for r in queue.rows}),
+                default=[],
+                key="queue_kind",
+            )
+            q_tier_values = sorted({r.tier or "" for r in queue.rows if r.tier})
+            q_tier_filter = st.multiselect("Queue tier", q_tier_values, default=[], key="queue_tier")
+            q_rc_values = sorted({r.root_cause_label for r in queue.rows})
+            q_rc_filter = st.multiselect("Queue root cause", q_rc_values, default=[], key="queue_root_cause")
+
+        q_filtered = filter_recovery_queue(
+            queue.rows,
+            state_filter=q_state_filter or None,
+            kind_filter=q_kind_filter or None,
+            tier_filter=q_tier_filter or None,
+            root_cause_filter=q_rc_filter or None,
+        )
+        if not q_filtered:
+            st.info("No queue entries match the current filters.")
+        else:
+            qdf = build_recovery_queue_df(
+                RecoveryQueue(
+                    rows=tuple(q_filtered),
+                    total=len(q_filtered),
+                    counts_by_state=queue.counts_by_state,
+                    counts_by_kind=queue.counts_by_kind,
+                )
+            )
+            st.dataframe(qdf, use_container_width=True, hide_index=True)
+            if len(q_filtered) != len(queue.rows):
+                st.caption(f"Showing {len(q_filtered)} of {len(queue.rows)} queue entries — headline KPIs remain batch-wide")
 
     # Graceful failure — prominent
     st.subheader("Graceful failure")
