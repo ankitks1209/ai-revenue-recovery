@@ -16,6 +16,8 @@ POLICY_PATH = BASE_DIR / "config" / "policy.yaml"
 # Environment configurations
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///failed_payments.db")
 RANDOM_SEED = int(os.getenv("RANDOM_SEED", "42"))
+RAZORPAY_WEBHOOK_SECRET = os.getenv("RAZORPAY_WEBHOOK_SECRET", "")
+RAZORPAY_TEST_MODE = os.getenv("RAZORPAY_TEST_MODE", "true").lower() in ("1", "true", "yes")
 
 def load_taxonomy() -> dict:
     """Load the failure-code taxonomy from config/taxonomy.yaml."""
