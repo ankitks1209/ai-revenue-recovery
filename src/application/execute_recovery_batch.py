@@ -1,7 +1,7 @@
 from typing import List, Dict, Any, Optional
 import uuid
 from src.domain.entities import RecoveryAttempt, Escalation
-from src.domain.models import Outcome
+from src.domain.models import Outcome, RailResponse
 from src.domain.retry_policy import RetryPolicy
 from src.domain.escalation_service import EscalationService
 from src.infrastructure.ports import FailedPaymentRepositoryPort, PaymentRailPort, ClockPort
@@ -163,13 +163,23 @@ class ExecuteRecoveryBatch:
         )
 
         if refusal:
-            # NEW: Emit audit event for hard-stop refusal
+            # Emit audit event for hard-stop refusal (hard fraud path)
             self._emit_audit(
                 payment=payment,
                 action=ActionType.REFUSE,
                 outcome=AuditOutcome.ESCALATED,
                 reason_code=refusal.reason_code,
                 decision_rationale=refusal.rationale
+            )
+        else:
+            # Unknown/unrecognized category forced to hard-stop by policy:
+            # not hard-fraud, but still a policy refusal — must be audited.
+            self._emit_audit(
+                payment=payment,
+                action=ActionType.REFUSE,
+                outcome=AuditOutcome.ESCALATED,
+                reason_code=ReasonCode.STOPPING_RULE_TRIP,
+                decision_rationale=reason
             )
 
         # Existing Phase 2 logic (unchanged)
@@ -233,9 +243,16 @@ class ExecuteRecoveryBatch:
 
     def _execute_rail_attempt(self, payment, category, chosen_action, executed_retries, policy_rule, now, stats):
         attempt_number = executed_retries + 1
-        rail_response = self.payment_rail.execute_attempt(
-            txn_id=payment.txn_id, amount=payment.amount, action_type=chosen_action, attempt_number=attempt_number
-        )
+        try:
+            rail_response = self.payment_rail.execute_attempt(
+                txn_id=payment.txn_id, amount=payment.amount, action_type=chosen_action, attempt_number=attempt_number
+            )
+        except Exception as e:
+            rail_response = RailResponse(
+                success=False,
+                error_message=f"Unhandled Rail Exception: {str(e)}",
+                gateway_reference="EXCEPTION"
+            )
         stats["executed_count"] += 1
 
         if rail_response.success:
