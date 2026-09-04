@@ -1,5 +1,6 @@
 from datetime import datetime
-from sqlalchemy import create_engine, String, Float, Integer, Boolean, DateTime
+from typing import Optional
+from sqlalchemy import create_engine, String, Float, Integer, Boolean, DateTime, ForeignKey
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from src.config import DATABASE_URL
 
@@ -24,6 +25,25 @@ class FailedPayment(Base):
     timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     payment_method: Mapped[str] = mapped_column(String, nullable=False)
 
+class RecoveryAttemptModel(Base):
+    __tablename__ = "recovery_attempts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    txn_id: Mapped[str] = mapped_column(String, ForeignKey("failed_payments.txn_id"), index=True, nullable=False)
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    outcome: Mapped[str] = mapped_column(String, nullable=False)
+    reason: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    action_type: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+class EscalationModel(Base):
+    __tablename__ = "escalations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    txn_id: Mapped[str] = mapped_column(String, ForeignKey("failed_payments.txn_id"), index=True, nullable=False)
+    reason: Mapped[str] = mapped_column(String, nullable=False)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
 def init_db():
     """Create all tables in the database (recreating them for fresh runs)."""
     Base.metadata.drop_all(bind=engine)
@@ -36,3 +56,4 @@ def get_db():
         yield db
     finally:
         db.close()
+

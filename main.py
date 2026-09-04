@@ -1,20 +1,73 @@
+import argparse
+import os
+from pathlib import Path
+from src.config import RANDOM_SEED
+from src.database import engine, SessionLocal, FailedPayment
 from src.ingest import load_failed_payments_to_db
 from src.classifier import FailureClassifier
 from src.policy_engine import PolicyEngine
-from src.database import SessionLocal, FailedPayment
-from src.config import RANDOM_SEED
+from src.application.execute_recovery_batch import ExecuteRecoveryBatch
+from src.application.generate_recovery_report import GenerateRecoveryReport
+from src.infrastructure.repository import SQLiteFailedPaymentRepository
+from src.infrastructure.mock_payment_rail import MockPaymentRail
+from src.infrastructure.clock import SystemClock
 
-def run_phase1_pipeline(count: int = 60, seed: int = RANDOM_SEED):
+def is_db_initialized() -> bool:
+    """
+    Checks if the SQLite database is initialized and has records in the failed_payments table.
+    """
+    from sqlalchemy import inspect
+    inspector = inspect(engine)
+    if not inspector.has_table("failed_payments"):
+        return False
+    session = SessionLocal()
+    try:
+        count = session.query(FailedPayment).count()
+        return count > 0
+    except Exception:
+        return False
+    finally:
+        session.close()
+
+def main():
+    parser = argparse.ArgumentParser(description="AI Revenue Recovery Agent CLI")
+    parser.add_argument(
+        "--reset",
+        action="store_true",
+        help="Explicitly reset and re-seed the SQLite database. WARNING: This will destroy existing records!"
+    )
+    parser.add_argument(
+        "--count",
+        type=int,
+        default=60,
+        help="Number of failed payments to generate if seeding is triggered (default: 60)"
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=RANDOM_SEED,
+        help=f"Random seed for data generation (default: {RANDOM_SEED})"
+    )
+    args = parser.parse_args()
+
     print("==================================================")
-    print(" AI REVENUE RECOVERY AGENT - PHASE 1 PIPELINE")
+    print("        AI REVENUE RECOVERY AGENT CLI (v1)")
     print("==================================================")
 
-    # 1. Generate & Load Synthetic Data (Day 1)
-    print("\n[Step 1/4] Generating & Loading Synthetic Failed Payments...")
-    load_failed_payments_to_db(count=count, seed=seed)
+    # 1. Database safety and initialization
+    db_ready = is_db_initialized()
+    if args.reset:
+        print("\n[Safe-Guard] '--reset' flag provided. Dropping tables and seeding fresh demo dataset...")
+        load_failed_payments_to_db(count=args.count, seed=args.seed)
+    elif not db_ready:
+        print("\n[Safe-Guard] Database is uninitialized or empty. Seeding a fresh demo dataset...")
+        load_failed_payments_to_db(count=args.count, seed=args.seed)
+    else:
+        print("\n[Safe-Guard] Existing database found with records. Processing existing dataset.")
+        print("             (To seed a fresh dataset, run with the '--reset' flag.)")
 
-    # 2. Read from Database & Classify (Day 2)
-    print("\n[Step 2/4] Running Failure Classifier / Detector...")
+    # 2. Phase 1 Classification and Policy
+    print("\n[Phase 1] Running Failure Classifier & Intervention Policy Engine...")
     session = SessionLocal()
     try:
         db_records = session.query(FailedPayment).all()
@@ -40,16 +93,13 @@ def run_phase1_pipeline(count: int = 60, seed: int = RANDOM_SEED):
     eval_result = classifier.evaluate_batch(records_list)
     classified_df = eval_result["dataframe"]
 
-    print("\nClassifier Performance vs Ground Truth:")
+    print("\n[Phase 1] Classifier Performance vs Ground Truth:")
     print(eval_result["report_str"])
 
-    # 3. Apply Intervention Policy (Day 3)
-    print("\n[Step 3/4] Applying Intervention Policy Table...")
     policy_engine = PolicyEngine()
     policy_df = policy_engine.apply_policy(classified_df)
 
-    # 4. Produce Phase 1 Annotated Output Preview & Summaries (Day 3)
-    print("\n[Step 4/4] Phase 1 Decision Preview (Sample of 10 records):")
+    print("\n[Phase 1] Decision Preview (Sample of 10 records):")
     preview_cols = ["txn_id", "failure_code", "predicted_category", "chosen_action", "bounds"]
     print(policy_df[preview_cols].head(10).to_string(index=False))
 
@@ -57,7 +107,7 @@ def run_phase1_pipeline(count: int = 60, seed: int = RANDOM_SEED):
     print("\n==================================================")
     print(" PHASE 1 SUMMARY AGGREGATES")
     print("==================================================")
-    print("\nRecords per Root-Cause Category:")
+    print("Records per Root-Cause Category:")
     for cat, cnt in summary["category_counts"].items():
         print(f"  - {cat}: {cnt}")
 
@@ -67,8 +117,36 @@ def run_phase1_pipeline(count: int = 60, seed: int = RANDOM_SEED):
 
     print(f"\nTotal Hard-Stop / Escalate-to-Human Review Records: {summary['escalation_count']}")
     print("==================================================")
-    print(" PHASE 1 COMPLETE - NO RETRIES EXECUTED (PER SCOPE)")
+
+    # 3. Phase 2 Bounded Recovery Execution
+    print("\n[Phase 2] Running Bounded Recovery Execution Batch...")
+    repo = SQLiteFailedPaymentRepository()
+    rail = MockPaymentRail(seed=args.seed)
+    clock = SystemClock()
+
+    executor = ExecuteRecoveryBatch(
+        repository=repo,
+        payment_rail=rail,
+        clock=clock,
+        policy_engine=policy_engine
+    )
+    exec_stats = executor.execute()
+
+    print("\n[Phase 2] Execution Summary:")
+    print(f"  - Total Processed     : {exec_stats['total_processed']}")
+    print(f"  - Executed Rail Retries: {exec_stats['executed_count']}")
+    print(f"  - Successful Recoveries: {exec_stats['success_count']}")
+    print(f"  - Failed Retries       : {exec_stats['failed_count']}")
+    print(f"  - Skipped (Backoff)    : {exec_stats['skipped_count']}")
+    print(f"  - Escalated to Human   : {exec_stats['escalated_count']}")
     print("==================================================")
 
+    # 4. Phase 2 Reporting v1 Output
+    print("\n[Phase 2] Generating Recovery Report v1...")
+    report_gen = GenerateRecoveryReport(repository=repo)
+    report_data = report_gen.generate_report()
+
+    print("\n" + report_gen.format_cli_report(report_data))
+
 if __name__ == "__main__":
-    run_phase1_pipeline()
+    main()
