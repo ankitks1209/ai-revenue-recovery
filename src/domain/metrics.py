@@ -157,7 +157,7 @@ class MetricsAggregator:
         ]
         graceful_failure: GracefulFailureMetric | None = None
         if candidates:
-            chosen = min(candidates, key=lambda e: e.timestamp)
+            chosen = min(candidates, key=lambda e: (e.timestamp, e.txn_id))
             graceful_failure = GracefulFailureMetric(
                 txn_id=chosen.txn_id,
                 tier=chosen.tier,

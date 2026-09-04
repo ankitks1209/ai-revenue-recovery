@@ -1,8 +1,12 @@
 """T10.3 — Streamlit dashboard (read-only, no business logic)."""
 from __future__ import annotations
 
+import os
+
 import pandas as pd
 import streamlit as st
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 from src.application.build_dashboard_data import BuildDashboardData
 from src.domain.metrics import DashboardMetrics
@@ -93,10 +97,21 @@ def filter_exceptions(
     return result
 
 
+DEMO_PAYMENTS_URL = "sqlite:///demo_failed_payments.db"
+DEMO_AUDIT_URL = "sqlite:///demo_audit_log.db"
+
+
 def load_metrics() -> DashboardMetrics:
     """Simple read-only flow: repos -> BuildDashboardData -> DashboardMetrics."""
-    payment_repo = SQLiteFailedPaymentRepository()
-    audit_repo = AuditLogRepository()
+    if os.getenv("DEMO_MODE") == "1":
+        # Read-only selection of demo DBs — never seeds/writes.
+        p_engine = create_engine(DEMO_PAYMENTS_URL, echo=False)
+        PSess = sessionmaker(bind=p_engine, autoflush=False, autocommit=False)
+        payment_repo = SQLiteFailedPaymentRepository(session_factory=PSess)
+        audit_repo = AuditLogRepository(db_url=DEMO_AUDIT_URL)
+    else:
+        payment_repo = SQLiteFailedPaymentRepository()
+        audit_repo = AuditLogRepository()
     aggregator = MetricsAggregator()
     builder = BuildDashboardData(
         payment_repository=payment_repo,

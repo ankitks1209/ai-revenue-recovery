@@ -26,7 +26,7 @@ from src.generator import generate_failed_payments
 from src.infrastructure.repository import SQLiteFailedPaymentRepository
 from src.infrastructure.mock_payment_rail import MockPaymentRail
 from src.infrastructure.clock import SimulatedClock
-from src.infrastructure.audit_repository import AuditLogRepository
+from src.infrastructure.audit_repository import AuditBase, AuditLogRepository
 from src.application.execute_recovery_batch import ExecuteRecoveryBatch
 from src.application.generate_audit_report import GenerateAuditReport
 
@@ -74,7 +74,9 @@ class FullBatchReplay:
         self,
         seed: int = 42,
         count: int = 60,
-        initial_time: datetime | None = None
+        initial_time: datetime | None = None,
+        payments_db_url: str | None = None,
+        audit_db_url: str | None = None,
     ):
         """
         Initialize replay with reproducibility parameters.
@@ -95,6 +97,8 @@ class FullBatchReplay:
         self.seed = seed
         self.count = count
         self.initial_time = initial_time or datetime(2026, 1, 1, 10, 0, 0)
+        self.payments_db_url = payments_db_url
+        self.audit_db_url = audit_db_url
     
     def execute(self) -> ReplayFingerprint:
         """
@@ -118,7 +122,15 @@ class FullBatchReplay:
         # ============================================================
         
         # Payments database (failed_payments, recovery_attempts, escalations)
-        payments_engine = create_engine("sqlite:///:memory:", echo=False)
+        # Default :memory: preserves existing fingerprint/determinism; optional URLs enable demo seeding.
+        _payments_url = self.payments_db_url or "sqlite:///:memory:"
+        _audit_url = self.audit_db_url or "sqlite:///:memory:"
+        # Fresh state for file-backed demo runs: drop then create (idempotent, no duplication on re-seed)
+        if _payments_url != "sqlite:///:memory:":
+            _tmp = create_engine(_payments_url, echo=False)
+            Base.metadata.drop_all(bind=_tmp)
+            _tmp.dispose()
+        payments_engine = create_engine(_payments_url, echo=False)
         Base.metadata.create_all(bind=payments_engine)
         PaymentsSessionLocal = sessionmaker(
             bind=payments_engine,
@@ -156,8 +168,12 @@ class FullBatchReplay:
         # Simulated clock with fixed time (no advancement during execution)
         clock = SimulatedClock(initial_time=self.initial_time)
         
-        # Audit repository using isolated in-memory database
-        audit_repo = AuditLogRepository(db_url="sqlite:///:memory:")
+        # Audit repository — file-backed when demo URLs supplied, else isolated
+        if _audit_url != "sqlite:///:memory:":
+            _tmp_a = create_engine(_audit_url, echo=False)
+            AuditBase.metadata.drop_all(bind=_tmp_a)
+            _tmp_a.dispose()
+        audit_repo = AuditLogRepository(db_url=_audit_url)
         
         # ============================================================
         # 4. PHASE 2: EXECUTE RECOVERY BATCH
