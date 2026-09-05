@@ -1,4 +1,4 @@
-"""T10.3 — Streamlit dashboard (read-only, no business logic)."""
+"""T10.3 — Streamlit dashboard for AI Revenue Recovery Operations."""
 from __future__ import annotations
 
 import os
@@ -209,9 +209,116 @@ def _render_dashboard() -> None:
         layout="wide",
     )
 
-    st.title("AI Revenue Recovery")
-    st.caption("Failed-Payment Recovery Operations")
-    st.info("Read-only / Simulation — no payment actions, no database writes.", icon="🔒")
+    # Razorpay-inspired operations-console presentation.
+    st.markdown(
+        """
+        <style>
+        .stApp {
+            background: #f7f8fa;
+        }
+        [data-testid="stSidebar"] {
+            background: #111318;
+        }
+        [data-testid="stSidebar"] * {
+            color: #f5f7fa;
+        }
+        .rr-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin: 4px 0 2px 0;
+        }
+        .rr-mark {
+            width: 34px;
+            height: 34px;
+            border-radius: 9px;
+            background: #0b0c10;
+            color: #ffffff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 800;
+            font-size: 17px;
+            border: 1px solid #2a2d35;
+        }
+        .rr-title {
+            font-size: 28px;
+            font-weight: 760;
+            color: #111318;
+            letter-spacing: -0.5px;
+        }
+        .rr-subtitle {
+            color: #68707d;
+            margin: 0 0 14px 47px;
+            font-size: 14px;
+        }
+        .rr-pill {
+            display: inline-block;
+            padding: 5px 9px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 650;
+            margin-bottom: 14px;
+        }
+        .rr-live {
+            background: #e7f7ef;
+            color: #087443;
+            border: 1px solid #b8e7ce;
+        }
+        .rr-demo {
+            background: #eef2f7;
+            color: #556070;
+            border: 1px solid #d6dce5;
+        }
+        .rr-section {
+            font-size: 18px;
+            font-weight: 720;
+            color: #17191f;
+            margin-top: 8px;
+            margin-bottom: 4px;
+        }
+        div[data-testid="stMetric"] {
+            background: #ffffff;
+            border: 1px solid #e3e6eb;
+            border-radius: 12px;
+            padding: 14px 16px;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+        }
+        .stButton > button {
+            border-radius: 9px;
+            font-weight: 650;
+        }
+        div[data-testid="stAlert"] {
+            border-radius: 10px;
+        }
+        div[data-testid="stDataFrame"] {
+            border: 1px solid #e3e6eb;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    mode_is_demo = os.getenv("DEMO_MODE") == "1"
+    st.markdown(
+        '<div class="rr-header"><div class="rr-mark">R</div><div class="rr-title">Revenue Recovery</div></div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div class="rr-subtitle">Razorpay payment operations · failed-payment recovery console</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f'<span class="rr-pill {"rr-demo" if mode_is_demo else "rr-live"}">'
+        f'{"Demo data · read-only" if mode_is_demo else "Razorpay Test Mode · live workflow"}'
+        '</span>',
+        unsafe_allow_html=True,
+    )
+
+    if mode_is_demo:
+        st.info("Demo mode is read-only. Recovery actions are disabled.", icon="🔒")
     st.divider()
 
     # Load metrics (simple flow, no cache)
@@ -229,6 +336,8 @@ def _render_dashboard() -> None:
     status_filter = st.sidebar.multiselect("Status", all_statuses, default=[])
     all_root_causes = sorted({e.root_cause_label for e in metrics.exception_list}) if metrics.exception_list else []
     root_cause_filter = st.sidebar.multiselect("Root Cause", all_root_causes, default=[])
+
+    st.markdown('<div class="rr-section">Recovery overview</div>', unsafe_allow_html=True)
 
     # Headline KPIs — directly from DashboardMetrics, no recalculation
     c1, c2, c3, c4 = st.columns(4)
@@ -282,8 +391,8 @@ def _render_dashboard() -> None:
         if len(filtered) != len(metrics.exception_list):
             st.caption(f"Showing {len(filtered)} of {len(metrics.exception_list)} exceptions — headline KPIs remain batch-wide")
 
-    # Recovery Queue — operator view (read-only, filters view-only, KPIs batch-wide)
-    st.subheader("Recovery Queue")
+    # Recovery Queue — operator view (filters are view-only; decisions use existing application services)
+    st.markdown('<div class="rr-section">Recovery queue</div>', unsafe_allow_html=True)
     try:
         queue = load_recovery_queue()
     except Exception as exc:  # noqa: BLE001 — degrade queue only, preserve KPIs
@@ -343,11 +452,21 @@ def _render_dashboard() -> None:
             if len(q_filtered) != len(queue.rows):
                 st.caption(f"Showing {len(q_filtered)} of {len(queue.rows)} queue entries — headline KPIs remain batch-wide")
 
-            st.markdown("**Operator decision**")
+            st.markdown("### Operator action")
             txn_options = [r.txn_id for r in q_filtered]
             selected_txn = st.selectbox("Transaction", txn_options, key="decision_txn")
             decision = st.selectbox("Decision", ["approve", "reject"], key="decision_kind")
             decision_reason = st.text_input("Reason", key="decision_reason")
+            if "decision_message" in st.session_state:
+                level, message = st.session_state.pop("decision_message")
+                if level == "success":
+                    st.success(message)
+                elif level == "warning":
+                    st.warning(message)
+                elif level == "error":
+                    st.error(message)
+                else:
+                    st.info(message)
             if st.button("Submit decision", key="submit_decision"):
                 try:
                     if decision == "approve":
@@ -355,41 +474,58 @@ def _render_dashboard() -> None:
                         if decide_result.applied and decide_result.lifecycle_state.value == "APPROVED":
                             exec_result = ExecuteApprovedRecovery().execute(selected_txn)
                             if exec_result.success:
-                                st.success(f"Payment Link created: {exec_result.gateway_reference}")
+                                st.session_state["decision_message"] = (
+                                    "success",
+                                    f"Payment Link created: {exec_result.gateway_reference}",
+                                )
                             elif exec_result.duplicate:
-                                st.warning(f"Already processed: {exec_result.reason}")
+                                st.session_state["decision_message"] = (
+                                    "warning",
+                                    f"Already processed: {exec_result.reason}",
+                                )
                             elif exec_result.lifecycle_state.value == "ESCALATED":
-                                st.warning(f"Escalated: {exec_result.reason}")
+                                st.session_state["decision_message"] = (
+                                    "warning",
+                                    f"Escalated: {exec_result.reason}",
+                                )
                             elif exec_result.lifecycle_state.value == "FAILED":
-                                st.error(f"Payment Link creation failed: {exec_result.reason}")
+                                st.session_state["decision_message"] = (
+                                    "error",
+                                    f"Payment Link creation failed: {exec_result.reason}",
+                                )
                             else:
-                                st.info(f"Decision recorded: {exec_result.reason}")
+                                st.session_state["decision_message"] = (
+                                    "info",
+                                    f"Decision recorded: {exec_result.reason}",
+                                )
                         else:
-                            st.info(f"Decision recorded: {decide_result.reason}")
+                            st.session_state["decision_message"] = (
+                                "info",
+                                f"Decision recorded: {decide_result.reason}",
+                            )
                     else:
                         DecideRecovery().decide(selected_txn, decision, decision_reason)
-                        st.success("Decision recorded.")
+                        st.session_state["decision_message"] = ("success", "Decision recorded.")
                     st.rerun()
                 except Exception as exc:  # noqa: BLE001
                     st.error(f"Decision failed: {exc}")
 
-    # Graceful failure — prominent
-    st.subheader("Graceful failure")
+    # Safety guardrail — compact proof that hard-fraud is never retried.
+    st.markdown('<div class="rr-section">Safety guardrails</div>', unsafe_allow_html=True)
     gf = metrics.graceful_failure
     if gf is None:
-        st.info("No do-not-retry record")
+        st.caption("No DO_NOT_RETRY event recorded in the current dataset.")
     else:
         with st.container(border=True):
-            st.markdown("**Graceful — refused hard-fraud record, handled without retry**")
-            gc1, gc2, gc3, gc4 = st.columns(4)
-            gc1.markdown(f"**Transaction:** {gf.txn_id}")
-            gc2.markdown(f"**Action:** {gf.action}")
-            gc3.markdown(f"**Reason code:** {gf.reason_code}")
-            gc4.markdown(f"**Tier:** {gf.tier}")
-            st.markdown(f"**Masked customer reference:** `{gf.customer_ref_masked}`")
-            st.markdown(f"**Decision rationale:** {gf.decision_rationale}")
-            st.caption(f"{gf.timestamp.isoformat()}")
-            st.success("Refused and escalated — fully audited, no retry.")
+            sg1, sg2, sg3, sg4 = st.columns(4)
+            sg1.markdown(f"**Tier**\n\n{gf.tier}")
+            sg2.markdown(f"**Action**\n\n{gf.action}")
+            sg3.markdown(f"**Reason**\n\n{gf.reason_code}")
+            sg4.markdown(f"**Transaction**\n\n`{gf.txn_id}`")
+            st.caption(
+                f"Hard-fraud / do-not-retry guardrail. {gf.decision_rationale} "
+                "No payment action is executed; the case is escalated and audited."
+            )
 
 
 def _is_streamlit_running() -> bool:
