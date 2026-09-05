@@ -16,6 +16,7 @@ from src.domain.recovery_queue import RecoveryQueue
 from src.infrastructure.audit_repository import AuditLogRepository
 from src.infrastructure.repository import SQLiteFailedPaymentRepository
 from src.application.decide_recovery import DecideRecovery
+from src.application.execute_approved_recovery import ExecuteApprovedRecovery
 from src.infrastructure.recovery_lifecycle_repository import RecoveryLifecycleRepository
 
 
@@ -349,8 +350,25 @@ def _render_dashboard() -> None:
             decision_reason = st.text_input("Reason", key="decision_reason")
             if st.button("Submit decision", key="submit_decision"):
                 try:
-                    DecideRecovery().decide(selected_txn, decision, decision_reason)
-                    st.success("Decision recorded.")
+                    if decision == "approve":
+                        decide_result = DecideRecovery().decide(selected_txn, decision, decision_reason)
+                        if decide_result.applied and decide_result.lifecycle_state.value == "APPROVED":
+                            exec_result = ExecuteApprovedRecovery().execute(selected_txn)
+                            if exec_result.success:
+                                st.success(f"Payment Link created: {exec_result.gateway_reference}")
+                            elif exec_result.duplicate:
+                                st.warning(f"Already processed: {exec_result.reason}")
+                            elif exec_result.lifecycle_state.value == "ESCALATED":
+                                st.warning(f"Escalated: {exec_result.reason}")
+                            elif exec_result.lifecycle_state.value == "FAILED":
+                                st.error(f"Payment Link creation failed: {exec_result.reason}")
+                            else:
+                                st.info(f"Decision recorded: {exec_result.reason}")
+                        else:
+                            st.info(f"Decision recorded: {decide_result.reason}")
+                    else:
+                        DecideRecovery().decide(selected_txn, decision, decision_reason)
+                        st.success("Decision recorded.")
                     st.rerun()
                 except Exception as exc:  # noqa: BLE001
                     st.error(f"Decision failed: {exc}")
