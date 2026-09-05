@@ -87,7 +87,8 @@ def test_dashboard_source_is_read_only():
         assert term not in src, f"read-only violation: {term}"
     # No DB mutation primitives in dashboard
     assert "drop_all" not in src
-    assert "st.button" not in src
+    # P5.5 operator decision control is the only approved write primitive
+    assert 'st.button("Submit decision"' in src or "st.button('Submit decision'" in src
     # DEMO_MODE must only select data source, not seed
     assert "FullBatchReplay" not in src
     assert "seed_demo" not in src.lower()

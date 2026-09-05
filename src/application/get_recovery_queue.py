@@ -15,6 +15,7 @@ from src.domain.recovery_queue import (
 from src.domain.recovery_recommendation import RecommendationKind
 from src.infrastructure.audit_repository import AuditLogRepository
 from src.infrastructure.ports import FailedPaymentRepositoryPort
+from src.infrastructure.recovery_lifecycle_repository import RecoveryLifecycleRepository
 
 
 class GetRecoveryQueue:
@@ -25,13 +26,16 @@ class GetRecoveryQueue:
         payment_repository: FailedPaymentRepositoryPort,
         audit_repository: AuditLogRepository,
         recommend_recovery: RecommendRecovery | None = None,
+        lifecycle_repository: RecoveryLifecycleRepository | None = None,
     ) -> None:
         self._payment_repository = payment_repository
         self._audit_repository = audit_repository
         self._recommend = recommend_recovery or RecommendRecovery()
+        self._lifecycle_repository = lifecycle_repository
 
     def row_for(self, payment: FailedPaymentEntity, audit_map: dict | None = None) -> RecoveryQueueRow:
-        lifecycle_state = derive_state(payment)
+        persisted = self._lifecycle_repository.get(payment.txn_id) if self._lifecycle_repository else None
+        lifecycle_state = persisted.state if persisted is not None else derive_state(payment)
         rec = self._recommend.recommend(payment, auto_eligible=False)
         status = derive_queue_status(payment)
         last_attempt_at = derive_last_attempt_at(payment)

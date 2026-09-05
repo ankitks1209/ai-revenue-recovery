@@ -117,7 +117,8 @@ def test_read_only_no_retry_or_payment_action_offered():
     src = open("dashboard.py").read()
     for term in ["execute_attempt", "save_attempt", "save_escalation", "ExecuteRecoveryBatch", "MockPaymentRail"]:
         assert term not in src, f"read-only violation: {term}"
-    assert "st.button" not in src
+    # P5.5 adds the approved operator decision control
+    assert 'st.button("Submit decision"' in src or "st.button('Submit decision'" in src
 
 
 def test_tier_breakdown_and_intervention_present_for_graceful():

@@ -15,6 +15,8 @@ from src.domain.metrics import MetricsAggregator
 from src.domain.recovery_queue import RecoveryQueue
 from src.infrastructure.audit_repository import AuditLogRepository
 from src.infrastructure.repository import SQLiteFailedPaymentRepository
+from src.application.decide_recovery import DecideRecovery
+from src.infrastructure.recovery_lifecycle_repository import RecoveryLifecycleRepository
 
 
 # ---------------------------------------------------------------------------
@@ -190,6 +192,7 @@ def load_recovery_queue() -> RecoveryQueue:
     service = GetRecoveryQueue(
         payment_repository=payment_repo,
         audit_repository=audit_repo,
+        lifecycle_repository=RecoveryLifecycleRepository(),
     )
     return service.run()
 
@@ -338,6 +341,19 @@ def _render_dashboard() -> None:
             st.dataframe(qdf, use_container_width=True, hide_index=True)
             if len(q_filtered) != len(queue.rows):
                 st.caption(f"Showing {len(q_filtered)} of {len(queue.rows)} queue entries — headline KPIs remain batch-wide")
+
+            st.markdown("**Operator decision**")
+            txn_options = [r.txn_id for r in q_filtered]
+            selected_txn = st.selectbox("Transaction", txn_options, key="decision_txn")
+            decision = st.selectbox("Decision", ["approve", "reject"], key="decision_kind")
+            decision_reason = st.text_input("Reason", key="decision_reason")
+            if st.button("Submit decision", key="submit_decision"):
+                try:
+                    DecideRecovery().decide(selected_txn, decision, decision_reason)
+                    st.success("Decision recorded.")
+                    st.rerun()
+                except Exception as exc:  # noqa: BLE001
+                    st.error(f"Decision failed: {exc}")
 
     # Graceful failure — prominent
     st.subheader("Graceful failure")

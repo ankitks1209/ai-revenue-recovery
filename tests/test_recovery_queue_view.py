@@ -187,10 +187,12 @@ def test_no_business_logic_in_dashboard_queue_helpers():
 
 def test_dashboard_has_no_write_controls():
     src = open("dashboard.py").read()
-    assert "st.button" not in src
+    # P5.5 intentionally adds Submit decision button; ensure it's the only
+    # approved write control — no generic forms, no DB mutation primitives.
+    assert 'st.button("Submit decision"' in src or "st.button('Submit decision'" in src
     assert "st.form" not in src
     assert "on_click" not in src
-    # no DB writes
+    # no DB writes via repository mutation methods
     assert "save_attempt" not in src
     assert "save_escalation" not in src
 

@@ -269,8 +269,10 @@ def test_read_only_no_mutation_controls():
     for term in forbidden:
         assert term not in src, f"dashboard must not contain {term} (read-only)"
     # rows.append for DataFrame building is allowed — audit mutation is forbidden separately
-    # No retry/refund button
-    assert "st.button" not in src
+    # P5.5 intentionally introduces the operator decision button; legacy read-only
+    # assertion on st.button is relaxed — the button must be the approved submit control.
+    assert "Submit decision" in src
+    assert 'st.button("Submit decision"' in src or "st.button('Submit decision'" in src
     # Ensure no execute_attempt call
     assert "execute_attempt" not in src
     # No database mutation via Session/commit

@@ -44,6 +44,28 @@ class EscalationModel(Base):
     reason: Mapped[str] = mapped_column(String, nullable=False)
     timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
 
+class RecoveryLifecycleModel(Base):
+    __tablename__ = "recovery_lifecycles"
+
+    txn_id: Mapped[str] = mapped_column(String, primary_key=True)
+    state: Mapped[str] = mapped_column(String, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    reason: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+class OperatorAuditModel(Base):
+    __tablename__ = "operator_audit_events"
+
+    event_id: Mapped[str] = mapped_column(String, primary_key=True)
+    txn_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    action: Mapped[str] = mapped_column(String, nullable=False)
+    decision_rationale: Mapped[str] = mapped_column(String, nullable=False)
+    outcome: Mapped[str] = mapped_column(String, nullable=False)
+    reason_code: Mapped[str] = mapped_column(String, nullable=False)
+    customer_ref_masked: Mapped[str] = mapped_column(String, nullable=False)
+    tier: Mapped[str] = mapped_column(String, nullable=False)
+
 def init_db():
     """Create all tables in the database (recreating them for fresh runs)."""
     Base.metadata.drop_all(bind=engine)
@@ -56,4 +78,3 @@ def get_db():
         yield db
     finally:
         db.close()
-
