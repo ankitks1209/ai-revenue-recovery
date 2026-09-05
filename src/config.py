@@ -16,22 +16,36 @@ POLICY_PATH = BASE_DIR / "config" / "policy.yaml"
 # Environment configurations
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///failed_payments.db")
 RANDOM_SEED = int(os.getenv("RANDOM_SEED", "42"))
+
+# Razorpay
 RAZORPAY_WEBHOOK_SECRET = os.getenv("RAZORPAY_WEBHOOK_SECRET", "")
 RAZORPAY_TEST_MODE = os.getenv("RAZORPAY_TEST_MODE", "true").lower() in ("1", "true", "yes")
 RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID", "")
 RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET", "")
 RAZORPAY_BASE_URL = os.getenv("RAZORPAY_BASE_URL", "https://api.razorpay.com/v1")
 
+# Groq AI diagnosis
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "qwen/qwen3.6-27b")
+
+
 def load_taxonomy() -> dict:
     """Load the failure-code taxonomy from config/taxonomy.yaml."""
     if not TAXONOMY_PATH.exists():
-        raise FileNotFoundError(f"Taxonomy configuration not found at {TAXONOMY_PATH}")
+        raise FileNotFoundError(
+            f"Taxonomy configuration not found at {TAXONOMY_PATH}"
+        )
+
     with open(TAXONOMY_PATH, "r") as f:
         return yaml.safe_load(f)
+
 
 def load_policy() -> dict:
     """Load the intervention policy from config/policy.yaml."""
     if not POLICY_PATH.exists():
-        raise FileNotFoundError(f"Policy configuration not found at {POLICY_PATH}")
+        raise FileNotFoundError(
+            f"Policy configuration not found at {POLICY_PATH}"
+        )
+
     with open(POLICY_PATH, "r") as f:
         return yaml.safe_load(f)

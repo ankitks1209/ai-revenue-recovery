@@ -8,6 +8,7 @@ import streamlit as st
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from src.application.ai_diagnosis import AIDiagnosis
 from src.application.build_dashboard_data import BuildDashboardData
 from src.application.get_recovery_queue import GetRecoveryQueue
 from src.domain.metrics import DashboardMetrics
@@ -302,6 +303,7 @@ def _render_dashboard() -> None:
     )
 
     mode_is_demo = os.getenv("DEMO_MODE") == "1"
+    st.title("AI Revenue Recovery")
     st.markdown(
         '<div class="rr-header"><div class="rr-mark">R</div><div class="rr-title">Revenue Recovery</div></div>',
         unsafe_allow_html=True,
@@ -455,18 +457,72 @@ def _render_dashboard() -> None:
             st.markdown("### Operator action")
             txn_options = [r.txn_id for r in q_filtered]
             selected_txn = st.selectbox("Transaction", txn_options, key="decision_txn")
+
+            # AI-assisted diagnosis — advisory only.
+            # It explains the failure but never decides or executes recovery.
+            selected_payment = next(
+                (r for r in q_filtered if r.txn_id == selected_txn),
+                None,
+            )
+
+            if selected_payment:
+                st.markdown("#### AI diagnosis")
+
+                if st.button("Analyze selected failure", key="ai_diagnose"):
+                    try:
+                        ai_result = AIDiagnosis().diagnose(
+                            failure_code=selected_payment.failure_code,
+                            root_cause=selected_payment.root_cause_label,
+                            reason=selected_payment.provider_hint,
+                        )
+                        st.session_state["ai_diagnosis_result"] = ai_result
+                        st.session_state["ai_diagnosis_txn"] = selected_txn
+                    except Exception as exc:  # noqa: BLE001
+                        st.session_state["ai_diagnosis_result"] = {
+                            "diagnosis": selected_payment.root_cause_label or "Unknown / Ambiguous",
+                            "confidence": "low",
+                            "explanation": (
+                                "AI diagnosis temporarily unavailable; "
+                                "using the existing deterministic classification."
+                            ),
+                            "model": "fallback",
+                            "source": "fallback",
+                            "error": type(exc).__name__,
+                        }
+                        st.session_state["ai_diagnosis_txn"] = selected_txn
+
+                ai_result = st.session_state.get("ai_diagnosis_result")
+                ai_txn = st.session_state.get("ai_diagnosis_txn")
+
+                if ai_result and ai_txn == selected_txn:
+                    ai_col1, ai_col2 = st.columns(2)
+
+                    with ai_col1:
+                        st.metric(
+                            "Diagnosis",
+                            ai_result["diagnosis"],
+                        )
+
+                    with ai_col2:
+                        st.metric(
+                            "Confidence",
+                            str(ai_result["confidence"]).capitalize(),
+                        )
+
+                    st.info(ai_result["explanation"])
+
+                    if ai_result.get("source") == "groq":
+                        st.caption(
+                            f"AI-generated diagnosis · {ai_result['model']}"
+                        )
+                    else:
+                        st.caption(
+                            "AI temporarily unavailable · "
+                            "deterministic classification shown"
+                        )
+
             decision = st.selectbox("Decision", ["approve", "reject"], key="decision_kind")
             decision_reason = st.text_input("Reason", key="decision_reason")
-            if "decision_message" in st.session_state:
-                level, message = st.session_state.pop("decision_message")
-                if level == "success":
-                    st.success(message)
-                elif level == "warning":
-                    st.warning(message)
-                elif level == "error":
-                    st.error(message)
-                else:
-                    st.info(message)
             if st.button("Submit decision", key="submit_decision"):
                 try:
                     if decision == "approve":
@@ -506,15 +562,39 @@ def _render_dashboard() -> None:
                     else:
                         DecideRecovery().decide(selected_txn, decision, decision_reason)
                         st.session_state["decision_message"] = ("success", "Decision recorded.")
+                    if "decision_message" in st.session_state:
+                        level, message = st.session_state["decision_message"]
+
+                        if level == "success":
+                            st.success(message)
+                        elif level == "warning":
+                            st.warning(message)
+                        elif level == "error":
+                            st.error(message)
+                        else:
+                            st.info(message)
+
                     st.rerun()
                 except Exception as exc:  # noqa: BLE001
                     st.error(f"Decision failed: {exc}")
 
-    # Safety guardrail — compact proof that hard-fraud is never retried.
-    st.markdown('<div class="rr-section">Safety guardrails</div>', unsafe_allow_html=True)
+            # Render the persisted operator result after the decision path.
+            if "decision_message" in st.session_state:
+                level, message = st.session_state.pop("decision_message")
+                if level == "success":
+                    st.success(message)
+                elif level == "warning":
+                    st.warning(message)
+                elif level == "error":
+                    st.error(message)
+                else:
+                    st.info(message)
+
+    # Graceful-failure panel — compact proof that hard fraud is never retried.
+    st.subheader("Graceful failure / Safety guardrails")
     gf = metrics.graceful_failure
     if gf is None:
-        st.caption("No DO_NOT_RETRY event recorded in the current dataset.")
+        st.caption("No do-not-retry record in the current dataset.")
     else:
         with st.container(border=True):
             sg1, sg2, sg3, sg4 = st.columns(4)
@@ -522,6 +602,7 @@ def _render_dashboard() -> None:
             sg2.markdown(f"**Action**\n\n{gf.action}")
             sg3.markdown(f"**Reason**\n\n{gf.reason_code}")
             sg4.markdown(f"**Transaction**\n\n`{gf.txn_id}`")
+            st.caption(f"**Masked reference:** `{gf.customer_ref_masked}`")
             st.caption(
                 f"Hard-fraud / do-not-retry guardrail. {gf.decision_rationale} "
                 "No payment action is executed; the case is escalated and audited."
