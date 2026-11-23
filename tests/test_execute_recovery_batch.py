@@ -33,7 +33,7 @@ def test_batch_hard_fraud_never_reaches_rail(batch_env):
         customer_id="C1",
         amount=1000.0,
         currency="INR",
-        failure_code="FRAUD",
+        failure_code="stolen_card",
         root_cause_label="Hard Fraud / Do-Not-Retry",
         recoverable_flag=False,
         retry_count=0,
@@ -63,7 +63,7 @@ def test_batch_mandate_lapse_single_attempt_and_escalate(batch_env):
         customer_id="C2",
         amount=500.0,
         currency="INR",
-        failure_code="MANDATE_FAIL",
+        failure_code="mandate_revoked",
         root_cause_label="Mandate Lapse",
         recoverable_flag=True,
         retry_count=0,
@@ -98,7 +98,7 @@ def test_batch_transient_backoff_and_timing(batch_env):
         customer_id="C3",
         amount=200.0,
         currency="INR",
-        failure_code="TIMEOUT",
+        failure_code="gateway_timeout",
         root_cause_label="Transient/Network",
         recoverable_flag=True,
         retry_count=0,
@@ -177,7 +177,7 @@ def _make_payment(txn_id, root_cause_label, recoverable_flag=True, **kwargs):
         customer_id="CUST_X",
         amount=500.0,
         currency="INR",
-        failure_code="GENERIC",
+        failure_code="gateway_timeout",
         retry_count=0,
         timestamp=datetime(2026, 1, 1, 8, 0, 0),
         payment_method="card",
@@ -269,10 +269,9 @@ def test_batch_continues_after_rail_crash_on_first_record(fresh_env):
 # T9.4.3 — Unknown failure code audit regression -----------------------------
 
 def test_unknown_failure_code_handled_safely(fresh_env):
-    """Unknown root_cause_label must be escalated safely without crashing."""
+    """Unknown failure code must be escalated safely without crashing."""
     session, repo, clock = fresh_env
-    # recoverable_flag=True means it is NOT hard fraud — it is genuinely unknown
-    session.add(_make_payment("TXN_UNK", "Totally Unknown Category", recoverable_flag=True))
+    session.add(_make_payment("TXN_UNK", "Transient/Network", failure_code="unmapped"))
     session.commit()
 
     executor = ExecuteRecoveryBatch(repo, MockPaymentRail(), clock)
@@ -285,7 +284,7 @@ def test_unknown_failure_code_handled_safely(fresh_env):
 def test_unknown_failure_code_emits_audit_event(fresh_env):
     """Unknown failure codes routed to hard-stop must emit a Phase 3 audit event."""
     session, repo, clock = fresh_env
-    session.add(_make_payment("TXN_UNK2", "Totally Unknown Category", recoverable_flag=True))
+    session.add(_make_payment("TXN_UNK2", "Transient/Network", failure_code="unmapped"))
     session.commit()
 
     executor = ExecuteRecoveryBatch(repo, MockPaymentRail(), clock)
@@ -301,10 +300,10 @@ def test_unknown_failure_code_emits_audit_event(fresh_env):
 
 
 def test_unknown_failure_code_does_not_alter_hard_fraud_semantics(fresh_env):
-    """Hard fraud (recoverable_flag=False) must still use DO_NOT_RETRY, not STOPPING_RULE_TRIP."""
+    """A stolen card must be refused even when both evaluation labels suggest recovery."""
     session, repo, clock = fresh_env
     session.add(_make_payment(
-        "TXN_FRAUD2", "Hard Fraud / Do-Not-Retry", recoverable_flag=False
+        "TXN_FRAUD2", "Transient/Network", recoverable_flag=True, failure_code="stolen_card"
     ))
     session.commit()
 
@@ -314,6 +313,9 @@ def test_unknown_failure_code_does_not_alter_hard_fraud_semantics(fresh_env):
     events = executor.audit_repo.all_events()
     assert len(events) == 1
     assert events[0].reason_code == ReasonCode.DO_NOT_RETRY
+    payment = repo.get_payment_by_id("TXN_FRAUD2")
+    assert payment.executed_retry_count == 0
+    assert len(payment.escalations) == 1
 
 
 # T9.4.4 — Empty batch -------------------------------------------------------
@@ -332,3 +334,25 @@ def test_empty_batch_does_not_raise(fresh_env):
     assert stats["failed_count"] == 0
     assert stats["skipped_count"] == 0
     assert stats["escalated_count"] == 0
+
+
+def test_preview_and_batch_choose_same_action_for_mislabelled_card(batch_env):
+    from src.classifier import FailureClassifier
+    from src.policy_engine import PolicyEngine
+
+    session, repo, rail, clock = batch_env
+    payment = _make_payment("TXN_EXPIRED", "Transient/Network", failure_code="54")
+    session.add(payment)
+    session.commit()
+
+    classifier = FailureClassifier()
+    policy = PolicyEngine()
+    preview = policy.apply_policy(classifier.classify_batch([{"failure_code": "54"}]))
+    assert preview.iloc[0]["predicted_category"] == "Expired Card"
+    assert repo.get_payment_by_id("TXN_EXPIRED").attempts == []
+
+    rail.force_all(True)
+    ExecuteRecoveryBatch(repo, rail, clock, policy_engine=policy, classifier=classifier).execute()
+    attempt, = repo.get_payment_by_id("TXN_EXPIRED").attempts
+    assert attempt.action_type == preview.iloc[0]["chosen_action"]
+    assert attempt.outcome == Outcome.SUCCESS

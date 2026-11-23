@@ -5,6 +5,7 @@ from src.domain.models import Outcome, RailResponse
 from src.domain.retry_policy import RetryPolicy
 from src.domain.escalation_service import EscalationService
 from src.infrastructure.ports import FailedPaymentRepositoryPort, PaymentRailPort, ClockPort
+from src.classifier import FailureClassifier
 from src.policy_engine import PolicyEngine
 from src.domain.audit import AuditEvent, ActionType, Outcome as AuditOutcome, ReasonCode
 from src.domain.masking import MaskingPolicy
@@ -26,8 +27,10 @@ class ExecuteRecoveryBatch:
         structured_logger: StructuredLogger = None,
         masking_policy: MaskingPolicy = None,
         escalation_policy: EscalationPolicy = None,
-        graceful_failure_handler: GracefulFailureHandler = None
+        graceful_failure_handler: GracefulFailureHandler = None,
+        classifier: FailureClassifier = None
     ):
+        self.classifier = classifier or FailureClassifier()
         self.repository = repository
         self.payment_rail = payment_rail
         self.clock = clock
@@ -53,7 +56,7 @@ class ExecuteRecoveryBatch:
             if payment.is_terminal:
                 continue
 
-            category = payment.root_cause_label
+            category = self.classifier.classify_code(payment.failure_code)
             policy_info = self.policy_engine.get_action_for_category(category)
             chosen_action = policy_info["chosen_action"]
             policy_rule = self.retry_policy.get_rule(category)
@@ -152,11 +155,7 @@ class ExecuteRecoveryBatch:
     def _handle_hard_stop(self, payment, category, chosen_action, now, stats):
         reason = f"Hard stop policy guard for category: {category}"
 
-        # NEW: Evaluate graceful failure for hard-stop case
-        # Derive is_do_not_retry from payment recoverable_flag (hard fraud indicator)
-        is_do_not_retry = not payment.recoverable_flag
-        # Hard-stop policy path does not map to stopping_rule_tripped;
-        # GracefulFailureHandler will classify based on is_do_not_retry alone
+        is_do_not_retry = category == "Hard Fraud / Do-Not-Retry"
         refusal = self.graceful_failure.evaluate(
             is_do_not_retry=is_do_not_retry,
             stopping_rule_tripped=False
