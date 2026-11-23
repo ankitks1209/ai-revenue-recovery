@@ -84,20 +84,11 @@ class SQLiteFailedPaymentRepository(FailedPaymentRepositoryPort):
                 timestamp=attempt.timestamp
             )
             session.add(attempt_model)
-            session.commit()
-            session.refresh(attempt_model)
-
-            # If SUCCESS or FAILED, update FailedPayment.retry_count to number of executed rail attempts
             if attempt.outcome in (Outcome.SUCCESS, Outcome.FAILED):
-                executed_count = session.query(RecoveryAttemptModel).filter(
-                    RecoveryAttemptModel.txn_id == attempt.txn_id,
-                    RecoveryAttemptModel.outcome.in_([Outcome.SUCCESS.value, Outcome.FAILED.value])
-                ).count()
-                db_p = session.query(FailedPaymentModel).filter(FailedPaymentModel.txn_id == attempt.txn_id).first()
-                if db_p:
-                    db_p.retry_count = executed_count
-                    session.commit()
-
+                payment = session.get(FailedPaymentModel, attempt.txn_id)
+                if payment:
+                    payment.retry_count = max(payment.retry_count + 1, attempt.attempt_number)
+            session.commit()
             attempt.id = attempt_model.id
             return attempt
         except Exception:

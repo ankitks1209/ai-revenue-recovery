@@ -44,6 +44,17 @@ class FailedPaymentEntity:
         return sum(1 for att in self.attempts if att.outcome in (Outcome.SUCCESS, Outcome.FAILED))
 
     @property
+    def total_retry_count(self) -> int:
+        """The persisted counter includes imported prior retries and local attempts."""
+        return max(self.retry_count, self.executed_retry_count)
+
+    @property
+    def first_recovery_attempt_at(self) -> Optional[datetime]:
+        if self.retry_count > self.executed_retry_count:
+            return self.timestamp
+        return min((a.timestamp for a in self.attempts if a.outcome in (Outcome.SUCCESS, Outcome.FAILED)), default=None)
+
+    @property
     def is_terminal(self) -> bool:
         """
         Returns True if the record has reached a terminal state (recovered via SUCCESS or escalated).

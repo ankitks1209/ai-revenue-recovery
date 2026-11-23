@@ -50,6 +50,13 @@ class GracefulFailureHandler:
 class EscalationPolicy:
     """Tier 1 automated retry → Tier 2 dunning → Tier 3 human handoff."""
 
+    def handoff_reason(self, amount: float, failures: int) -> Optional[str]:
+        if amount >= HIGH_VALUE_THRESHOLD:
+            return "High-value payment requires human review"
+        if failures >= 2:
+            return "Two recorded recovery failures require human review"
+        return None
+
     def assign_tier(
         self,
         *,
@@ -64,7 +71,7 @@ class EscalationPolicy:
         ):
             return "T3"
 
-        if amount >= HIGH_VALUE_THRESHOLD or retry_count >= 2:
+        if self.handoff_reason(amount, retry_count):
             return "T3"
 
         # Tier 2: dunning / re-auth situations.

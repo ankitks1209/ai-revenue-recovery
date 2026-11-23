@@ -168,8 +168,8 @@ def test_max_retries_emits_refuse_escalated_stopping_rule(batch_env_with_audit):
     assert uuid.UUID(event.event_id)  # Valid UUID
 
 
-def test_temporary_skip_emits_mapped_skipped_recovered(batch_env_with_audit):
-    """Timing delay not met → <mapped>/SKIPPED/RECOVERED audit, no escalation."""
+def test_temporary_skip_emits_mapped_skipped_backoff(batch_env_with_audit):
+    """Timing delay not met → <mapped>/SKIPPED/BACKOFF audit, no escalation."""
     session, repo, rail, clock, audit_repo, logger = batch_env_with_audit
 
     # Arrange: Create transient payment
@@ -212,7 +212,7 @@ def test_temporary_skip_emits_mapped_skipped_recovered(batch_env_with_audit):
     event = events[0]
     assert event.action == ActionType.RETRY  # Transient -> RETRY
     assert event.outcome == AuditOutcome.SKIPPED
-    assert event.reason_code == ReasonCode.RECOVERED
+    assert event.reason_code == ReasonCode.BACKOFF
     assert "CUST_003" not in event.customer_ref_masked
 
 

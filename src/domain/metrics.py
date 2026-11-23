@@ -107,8 +107,7 @@ class MetricsAggregator:
         # Build txn -> audit lookup for tier/reason_code enrichment
         audit_by_txn: dict[str, AuditEvent] = {}
         for e in audit_events:
-            if e.txn_id not in audit_by_txn:
-                audit_by_txn[e.txn_id] = e
+            audit_by_txn[e.txn_id] = e
 
         exceptions: list[ExceptionMetric] = []
         for p in payments:

@@ -22,6 +22,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 from src.database import Base, FailedPayment as FailedPaymentModel
+from src.domain.models import Outcome
 from src.generator import generate_failed_payments
 from src.infrastructure.repository import SQLiteFailedPaymentRepository
 from src.infrastructure.mock_payment_rail import MockPaymentRail
@@ -54,6 +55,7 @@ class ReplayFingerprint:
     failed_count: int
     skipped_count: int
     escalated_count: int
+    first_pass_recovered: float
     money_recovered: float
     recoverable_denominator: float
     audit_event_count: int
@@ -165,7 +167,7 @@ class FullBatchReplay:
         # MockPaymentRail uses SHA256(seed:txn_id:attempt_number) for determinism
         rail = MockPaymentRail(seed=self.seed)
         
-        # Simulated clock with fixed time (no advancement during execution)
+        # Simulated clock with deterministic advancement through recovery windows
         clock = SimulatedClock(initial_time=self.initial_time)
         
         # Audit repository — file-backed when demo URLs supplied, else isolated
@@ -187,7 +189,22 @@ class FullBatchReplay:
             # Uses default PolicyEngine, RetryPolicy, etc.
         )
         
+        # Replay a batch of already observed failures. Time cannot precede intake.
+        clock.set_time(max(clock.now(), max(record["timestamp"] for record in records)))
         batch_stats = executor.execute()
+        payments = repo.get_all_payments()
+        first_pass_recovered = sum(p.amount for p in payments if any(a.outcome == Outcome.SUCCESS for a in p.attempts))
+        pending = [p for p in payments if not p.is_terminal]
+        while pending:
+            schedule = [(executor.next_attempt_at(p), p) for p in pending]
+            due = min(t for t, _ in schedule)
+            clock.set_time(max(clock.now(), due))
+            ready = sorted((p for t, p in schedule if t <= clock.now()), key=lambda p: p.txn_id)
+            step = executor.execute_payments(ready)
+            for key in step:
+                if key != "total_processed":
+                    batch_stats[key] += step[key]
+            pending = [p for p in repo.get_all_payments() if not p.is_terminal]
         
         # ============================================================
         # 5. PHASE 3: GENERATE AUDIT REPORT
@@ -256,6 +273,7 @@ class FullBatchReplay:
             failed_count=batch_stats["failed_count"],
             skipped_count=batch_stats["skipped_count"],
             escalated_count=batch_stats["escalated_count"],
+            first_pass_recovered=round(first_pass_recovered, 2),
             money_recovered=round(money_recovered, 2),
             recoverable_denominator=round(recoverable_denominator, 2),
             audit_event_count=len(audit_events),

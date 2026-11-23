@@ -202,9 +202,13 @@ The batch evaluation contains synthetic test data. These numbers must not be pre
 Failed payments tested : 60
 Total at risk          : ₹3,00,900.69
 Recoverable pool       : ₹2,47,369.37
-Recovered              : ₹1,22,019.57
-Recovery rate          : 49.33%
+First pass recovered   : ₹1,53,093.84
+Final recovered         : ₹1,88,910.14
+Recovery rate          : 76.37%
+Final disposition      : 36 recovered, 24 handed to review
 ```
+
+The seed-42 replay advances simulated time to each due retry. Imported retries count toward the category cap. The first automatic attempt uses one slot. Two locally recorded failures or an INR payment of ₹10,000 or more trigger human review. For a preexisting retry with no local history, the recorded failure timestamp anchors the wait. Insufficient-funds cases use a 48-hour interval. Expired-card follow-ups have a seven-day window from the first known outreach.
 
 Separately, the Razorpay Test Mode flow was validated with an actual Payment Link.
 

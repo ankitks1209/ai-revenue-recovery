@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import List, Optional
 
-from sqlalchemy import DateTime, String, create_engine
+from sqlalchemy import DateTime, String, create_engine, literal_column
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from src.domain.audit import ActionType, AuditEvent, Outcome, ReasonCode
@@ -57,7 +57,7 @@ class AuditLogRepository:
             query = session.query(AuditEventRow)
             if since is not None:
                 query = query.filter(AuditEventRow.timestamp >= since)
-            rows = query.order_by(AuditEventRow.timestamp.asc(), AuditEventRow.event_id.asc()).all()
+            rows = query.order_by(AuditEventRow.timestamp.asc(), literal_column("rowid").asc()).all()
             return [
                 AuditEvent(
                     event_id=r.event_id,
