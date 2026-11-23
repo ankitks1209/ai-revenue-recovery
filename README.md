@@ -1,62 +1,24 @@
 # AI Failed-Payment Recovery Agent
 
-A controlled payment-recovery system for failed Razorpay payments.
+The four-phase project measures how much of a batch of failed payments can be recovered under a bounded intervention policy. The batch demo uses synthetic records and a seeded payment simulator.
 
-The project combines deterministic payment-failure classification, AI-assisted failure diagnosis, policy-based recovery decisions, operator approval, Razorpay Test Mode Payment Links, webhook-driven lifecycle updates, idempotency, auditability, and recovery metrics.
+| Phase | What to inspect |
+|---|---|
+| 1. Classify failures | The CLI compares failure-code classifications against labeled records and previews the intervention for each category. |
+| 2. Execute bounded actions | The batch executor checks retry eligibility, records attempts, and routes hard stops to review. |
+| 3. Audit decisions | The replay records masked events and summarizes refusals and escalation tiers. |
+| 4. Measure recovery | The dashboard reports recovered amount, recoverable amount, intervention mix, and unresolved cases. |
 
-## Why this project
+To reproduce the demo from the repository root after installing the dependencies, run the following commands. The seed command rebuilds the two demo databases.
 
-A failed payment is not always safe to retry.
-
-A recovery system needs to answer six questions:
-
-1. What failed?
-2. Why did it fail?
-3. Is recovery allowed?
-4. What recovery action should be proposed?
-5. Did the external payment action actually happen?
-6. What was the final business result?
-
-This project separates those concerns so that AI helps with diagnosis and explanation, while money-moving decisions remain deterministic and auditable.
-
-## Core workflow
-
-```text
-Failed payment
-      |
-      v
-Failure classification
-      |
-      +----> AI diagnosis (advisory)
-      |
-      v
-Deterministic recovery policy
-      |
-      v
-Operator approval / rejection
-      |
-      v
-Recovery lifecycle
-APPROVED -> EXECUTING
-      |
-      v
-Razorpay Test Mode Payment Link
-      |
-      v
-Webhook ingestion
-      |
-      v
-RECOVERED / FAILED
-      |
-      v
-Audit trail + dashboard metrics
+```bash
+python scripts/seed_demo.py --confirm --seed 42 --count 60
+DEMO_MODE=1 streamlit run dashboard.py
 ```
 
-### Safety boundary
+## Optional operator workflow
 
-The AI diagnosis layer does **not** approve, reject, retry, refund, or execute payments.
-
-Hard-fraud and stopping-rule cases remain protected by deterministic recovery rules. These cases are refused/escalated rather than sent to the payment rail.
+For an existing case in the normal database, an operator can inspect the policy recommendation and approve a Razorpay Test Mode Payment Link. Link creation leaves the case pending until a terminal webhook arrives.
 
 ## Architecture
 
@@ -79,7 +41,7 @@ src/
 │   ├── ingest_payment_link_result.py
 │   ├── get_recovery_queue.py
 │   ├── build_dashboard_data.py
-│   └── ai_diagnosis.py
+│   └── execute_recovery_batch.py
 │
 └── infrastructure/
     ├── repository.py
@@ -96,43 +58,11 @@ src/
 
 **Domain** contains lifecycle states, recovery recommendations, audit semantics, safety invariants, and other business rules.
 
-**Application** orchestrates use cases such as classification/recommendation, operator decisions, execution, webhook ingestion, dashboard data assembly, and AI diagnosis.
+**Application** orchestrates use cases such as classification/recommendation, operator decisions, execution, webhook ingestion, and dashboard data assembly.
 
 **Infrastructure** handles persistence, Razorpay integration, webhook verification, and provider-specific mapping.
 
-**Dashboard** is a Streamlit operator console. It displays recovery metrics, the recovery queue, AI diagnosis, safety controls, and operator actions.
-
-## AI diagnosis
-
-The AI layer uses Groq with the configured Qwen model.
-
-Example output:
-
-```text
-Diagnosis: Gateway Timeout
-Confidence: High
-
-The payment gateway failed to respond within the expected
-time limit, likely due to transient network issues or
-high server load.
-```
-
-The diagnosis is intentionally separate from recovery authorization:
-
-```text
-AI diagnosis
-     |
-     v
-Human-readable explanation
-     |
-     v
-Deterministic policy
-     |
-     v
-Operator decision
-```
-
-If the AI provider is unavailable, the system falls back to the existing deterministic classification instead of breaking the recovery console.
+**Dashboard** is a Streamlit operator console. It displays recovery metrics, the recovery queue, safety controls, and operator actions.
 
 ## Razorpay integration
 
@@ -199,8 +129,6 @@ RAZORPAY_KEY_ID=your_razorpay_test_key_id
 RAZORPAY_KEY_SECRET=your_razorpay_test_key_secret
 RAZORPAY_BASE_URL=https://api.razorpay.com/v1
 
-GROQ_API_KEY=your_groq_api_key
-GROQ_MODEL=qwen/qwen3.6-27b
 ```
 
 Never commit `.env`.
@@ -228,7 +156,7 @@ The final local verification for this version completed with all tests passing.
 
 Warnings from third-party libraries may still appear during the test run; they do not indicate test failures.
 
-## Demo walkthrough
+## Operator walkthrough
 
 For the 5-minute demo:
 
@@ -236,19 +164,9 @@ For the 5-minute demo:
 
 Show a failed payment in the recovery queue.
 
-### 2. Run AI diagnosis
+### 2. Inspect the recommendation
 
-Select the transaction and click:
-
-```text
-Analyze selected failure
-```
-
-Show the diagnosis and confidence.
-
-Explain:
-
-> The AI is advisory. It explains the payment failure, but it does not authorize the recovery action.
+Review the failure code, root cause, and recommended intervention in the recovery queue.
 
 ### 3. Make the operator decision
 
@@ -326,8 +244,7 @@ This avoids holding an external payment-provider call inside the database transa
 1. This is a Razorpay **Test Mode** integration, not production payments.
 2. The current concrete recovery mechanism is Payment Links; additional recovery rails can be added later.
 3. Final recovery confirmation depends on webhook delivery and correct provider-side event handling.
-4. AI diagnosis is advisory and should not be treated as an authorization engine.
-5. The current batch metrics use synthetic data for reproducible evaluation.
+4. The current batch metrics use synthetic data for reproducible evaluation.
 
 ## Repository contents
 
