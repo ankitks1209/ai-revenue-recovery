@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict
 
 class ReasonCode(str, enum.Enum):
     RECOVERED = "recovered"
+    BACKOFF = "backoff"
     RETRIES_EXHAUSTED = "retries_exhausted"
     RAIL_DECLINED = "rail_declined"
     DO_NOT_RETRY = "do_not_retry"

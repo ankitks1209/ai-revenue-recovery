@@ -124,12 +124,12 @@ def test_batch_transient_backoff_and_timing(batch_env):
     assert stats2["skipped_count"] == 1
     assert stats2["executed_count"] == 0
 
-    # Advance clock by 2 hours
-    clock.advance(hours=2)
+    # Restart at the first eligible time
+    clock.advance(hours=1)
     rail.set_fixture("TXN_TRANSIENT", True) # Second attempt succeeds
 
-    # 3rd run after time advance: should execute 2nd attempt and succeed
-    stats3 = executor.execute()
+    # A fresh executor reconstructs eligibility from persisted history.
+    stats3 = ExecuteRecoveryBatch(repo, rail, clock).execute()
     assert stats3["executed_count"] == 1
     assert stats3["success_count"] == 1
 
@@ -356,3 +356,44 @@ def test_preview_and_batch_choose_same_action_for_mislabelled_card(batch_env):
     attempt, = repo.get_payment_by_id("TXN_EXPIRED").attempts
     assert attempt.action_type == preview.iloc[0]["chosen_action"]
     assert attempt.outcome == Outcome.SUCCESS
+
+
+@pytest.mark.parametrize("amount, prior", [(10000, 0), (200, 3)])
+def test_high_value_or_exhausted_prior_allowance_stops_before_rail(batch_env, amount, prior):
+    session, repo, rail, clock = batch_env
+    session.add(_make_payment("blocked", "Transient/Network", amount=amount, retry_count=prior))
+    session.commit()
+    executor = ExecuteRecoveryBatch(repo, rail, clock)
+    assert executor.execute()["executed_count"] == 0
+    assert executor.execute()["escalated_count"] == 0
+    event, = executor.audit_repo.all_events()
+    assert (event.action, event.tier) == (ActionType.REFUSE, "T3")
+
+
+def test_two_failed_retries_end_in_one_handoff(batch_env):
+    session, repo, rail, clock = batch_env
+    session.add(_make_payment("timeout", "Transient/Network"))
+    session.commit()
+    rail.force_all(False)
+    executor = ExecuteRecoveryBatch(repo, rail, clock)
+    assert executor.execute()["failed_count"] == 1
+    clock.advance(hours=1)
+    assert executor.execute()["escalated_count"] == 1
+    clock.advance(days=1)
+    assert executor.execute()["executed_count"] == 0
+    payment = repo.get_payment_by_id("timeout")
+    assert payment.total_retry_count == 2
+    assert len(payment.escalations) == 1
+
+
+def test_card_update_window_expires_across_restart(batch_env):
+    session, repo, rail, clock = batch_env
+    session.add(_make_payment("card", "Expired Card", failure_code="54"))
+    session.commit()
+    rail.force_all(False)
+    assert ExecuteRecoveryBatch(repo, rail, clock).execute()["executed_count"] == 1
+    clock.advance(days=8)
+    stats = ExecuteRecoveryBatch(repo, rail, clock).execute()
+    assert stats["executed_count"] == 0
+    assert stats["escalated_count"] == 1
+    assert "window" in repo.get_payment_by_id("card").escalations[0].reason

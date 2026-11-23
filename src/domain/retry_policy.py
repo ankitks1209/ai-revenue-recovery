@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Tuple
 
 @dataclass
@@ -9,6 +9,7 @@ class PolicyRule:
     min_interval_seconds: float
     backoff_schedule: Tuple[float, ...]  # backoff delays in seconds for retry indexes 0, 1, 2, ...
     is_hard_stop: bool = False
+    window_days: Optional[int] = None
 
 DEFAULT_RULES = {
     "Insufficient Funds": PolicyRule(
@@ -22,7 +23,8 @@ DEFAULT_RULES = {
         category="Expired Card",
         max_retries=2,
         min_interval_seconds=24 * 3600.0,  # min 24h apart
-        backoff_schedule=(0.0, 3.5 * 86400.0), # over 7 days
+        backoff_schedule=(0.0, 3.5 * 86400.0),
+        window_days=7,
         is_hard_stop=False
     ),
     "Transient/Network": PolicyRule(
@@ -67,6 +69,10 @@ class RetryPolicy:
             backoff_schedule=(),
             is_hard_stop=True
         ))
+
+    def window_expired(self, category, first_attempt_at, now):
+        days = self.get_rule(category).window_days
+        return days is not None and first_attempt_at is not None and now > first_attempt_at + timedelta(days=days)
 
     def is_hard_stop(self, category: str) -> bool:
         return self.get_rule(category).is_hard_stop

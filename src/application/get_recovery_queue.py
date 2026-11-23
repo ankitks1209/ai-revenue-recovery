@@ -73,8 +73,7 @@ class GetRecoveryQueue:
         events = self._audit_repository.all_events()
         audit_by_txn: dict[str, object] = {}
         for e in events:
-            if e.txn_id not in audit_by_txn:
-                audit_by_txn[e.txn_id] = e
+            audit_by_txn[e.txn_id] = e
         rows: list[RecoveryQueueRow] = []
         for p in payments:
             row = self.row_for(p, audit_map=audit_by_txn)
