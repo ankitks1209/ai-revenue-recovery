@@ -128,7 +128,8 @@ def main():
         repository=repo,
         payment_rail=rail,
         clock=clock,
-        policy_engine=policy_engine
+        policy_engine=policy_engine,
+        classifier=classifier
     )
     exec_stats = executor.execute()
 
